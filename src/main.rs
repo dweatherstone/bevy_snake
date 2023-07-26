@@ -38,7 +38,9 @@ struct SnakeHead {
     direction: Direction,
 }
 
+#[derive(Event)]
 struct GameOverEvent;
+#[derive(Event)]
 struct GrowthEvent;
 
 #[derive(Default, Resource)]
@@ -284,22 +286,23 @@ fn main() {
             }),
             ..default()
         }))
-        .add_startup_system(setup_camera)
-        .add_startup_system(spawn_snake)
+        .add_systems(Startup, (setup_camera, spawn_snake))
         .insert_resource(SnakeSegments::default())
         .insert_resource(LastTailPosition::default())
         .add_event::<GrowthEvent>()
-        .add_system(snake_movement_input.before(snake_movement))
+        .add_systems(Update, snake_movement_input.before(snake_movement))
         .add_event::<GameOverEvent>()
-        .add_system(snake_movement.run_if(on_timer(Duration::from_secs_f32(0.150))))
-        .add_system(snake_eating.after(snake_movement))
-        .add_system(snake_growth.after(snake_eating))
-        .add_system(game_over.after(snake_movement))
-        .add_system(food_spawner.run_if(on_timer(Duration::from_secs_f32(1.0))))
         .add_systems(
-            (position_translation, size_scaling)
-                .chain()
-                .in_base_set(CoreSet::PostUpdate),
+            Update,
+            snake_movement.run_if(on_timer(Duration::from_secs_f32(0.150))),
         )
+        .add_systems(Update, snake_eating.after(snake_movement))
+        .add_systems(Update, snake_growth.after(snake_eating))
+        .add_systems(Update, game_over.after(snake_movement))
+        .add_systems(
+            Update,
+            food_spawner.run_if(on_timer(Duration::from_secs_f32(1.0))),
+        )
+        .add_systems(PostUpdate, (position_translation, size_scaling))
         .run();
 }
