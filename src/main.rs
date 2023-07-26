@@ -1,5 +1,9 @@
-use bevy::core::FixedTimestep;
+use std::time::Duration;
+
+use bevy::core_pipeline::clear_color::ClearColorConfig;
 use bevy::prelude::*;
+use bevy::time::common_conditions::on_timer;
+use bevy::window::{PrimaryWindow, WindowResolution};
 use rand::prelude::random;
 
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
@@ -37,13 +41,13 @@ struct SnakeHead {
 struct GameOverEvent;
 struct GrowthEvent;
 
-#[derive(Default)]
+#[derive(Default, Resource)]
 struct LastTailPosition(Option<Position>);
 
 #[derive(Component)]
 struct SnakeSegment;
 
-#[derive(Default, Deref, DerefMut)]
+#[derive(Default, Deref, DerefMut, Resource)]
 struct SnakeSegments(Vec<Entity>);
 
 #[derive(Component)]
@@ -69,13 +73,18 @@ impl Direction {
 }
 
 fn setup_camera(mut commands: Commands) {
-    commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+    commands.spawn(Camera2dBundle {
+        camera_2d: Camera2d {
+            clear_color: ClearColorConfig::Custom(Color::rgb(0.04, 0.04, 0.04)),
+        },
+        ..default()
+    });
 }
 
 fn spawn_snake(mut commands: Commands, mut segments: ResMut<SnakeSegments>) {
     *segments = SnakeSegments(vec![
         commands
-            .spawn_bundle(SpriteBundle {
+            .spawn(SpriteBundle {
                 sprite: Sprite {
                     color: SNAKE_HEAD_COLOR,
                     ..default()
@@ -95,7 +104,7 @@ fn spawn_snake(mut commands: Commands, mut segments: ResMut<SnakeSegments>) {
 
 fn spawn_segment(mut commands: Commands, position: Position) -> Entity {
     commands
-        .spawn_bundle(SpriteBundle {
+        .spawn(SpriteBundle {
             sprite: Sprite {
                 color: SNAKE_SEGMENT_COLOR,
                 ..default()
@@ -216,27 +225,33 @@ fn snake_growth(
     }
 }
 
-fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
-    let window = windows.get_primary().unwrap();
+fn size_scaling(
+    primary_query: Query<&Window, With<PrimaryWindow>>,
+    mut q: Query<(&Size, &mut Transform)>,
+) {
+    let Ok(window) = primary_query.get_single() else { return ; };
     for (sprite_size, mut transform) in q.iter_mut() {
         transform.scale = Vec3::new(
-            sprite_size.width / ARENA_WIDTH as f32 * window.width() as f32,
-            sprite_size.height / ARENA_HEIGHT as f32 * window.height() as f32,
+            sprite_size.width / ARENA_WIDTH as f32 * window.width(),
+            sprite_size.height / ARENA_HEIGHT as f32 * window.height(),
             1.0,
         );
     }
 }
 
-fn position_translation(windows: Res<Windows>, mut q: Query<(&Position, &mut Transform)>) {
+fn position_translation(
+    primary_query: Query<&Window, With<PrimaryWindow>>,
+    mut q: Query<(&Position, &mut Transform)>,
+) {
     fn convert(pos: f32, bound_window: f32, bound_game: f32) -> f32 {
         let tile_size = bound_window / bound_game;
         pos / bound_game * bound_window - (bound_window / 2.) + (tile_size / 2.)
     }
-    let window = windows.get_primary().unwrap();
+    let Ok(window) = primary_query.get_single() else { return ; };
     for (pos, mut transform) in q.iter_mut() {
         transform.translation = Vec3::new(
-            convert(pos.x as f32, window.width() as f32, ARENA_WIDTH as f32),
-            convert(pos.y as f32, window.height() as f32, ARENA_HEIGHT as f32),
+            convert(pos.x as f32, window.width(), ARENA_WIDTH as f32),
+            convert(pos.y as f32, window.height(), ARENA_HEIGHT as f32),
             0.0,
         );
     }
@@ -244,7 +259,7 @@ fn position_translation(windows: Res<Windows>, mut q: Query<(&Position, &mut Tra
 
 fn food_spawner(mut commands: Commands) {
     commands
-        .spawn_bundle(SpriteBundle {
+        .spawn(SpriteBundle {
             sprite: Sprite {
                 color: FOOD_COLOR,
                 ..default()
@@ -261,13 +276,14 @@ fn food_spawner(mut commands: Commands) {
 
 fn main() {
     App::new()
-        .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
-        .insert_resource(WindowDescriptor {
-            title: "Snake!".to_string(),
-            width: 500.0,
-            height: 500.0,
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Snake!".to_string(),
+                resolution: WindowResolution::new(500.0, 500.0),
+                ..default()
+            }),
             ..default()
-        })
+        }))
         .add_startup_system(setup_camera)
         .add_startup_system(spawn_snake)
         .insert_resource(SnakeSegments::default())
@@ -275,25 +291,15 @@ fn main() {
         .add_event::<GrowthEvent>()
         .add_system(snake_movement_input.before(snake_movement))
         .add_event::<GameOverEvent>()
-        .add_system_set(
-            SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(0.150))
-                .with_system(snake_movement)
-                .with_system(snake_eating.after(snake_movement))
-                .with_system(snake_growth.after(snake_eating)),
-        )
+        .add_system(snake_movement.run_if(on_timer(Duration::from_secs_f32(0.150))))
+        .add_system(snake_eating.after(snake_movement))
+        .add_system(snake_growth.after(snake_eating))
         .add_system(game_over.after(snake_movement))
-        .add_system_set(
-            SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(1.0))
-                .with_system(food_spawner),
+        .add_system(food_spawner.run_if(on_timer(Duration::from_secs_f32(1.0))))
+        .add_systems(
+            (position_translation, size_scaling)
+                .chain()
+                .in_base_set(CoreSet::PostUpdate),
         )
-        .add_system_set_to_stage(
-            CoreStage::PostUpdate,
-            SystemSet::new()
-                .with_system(position_translation)
-                .with_system(size_scaling),
-        )
-        .add_plugins(DefaultPlugins)
         .run();
 }
